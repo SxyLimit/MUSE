@@ -38,3 +38,7 @@ To run MUSE on The Agent Company Benchmark, please refer to the guides in https:
 
 
 
+## Demo
+[![Watch the demo](misc/demo1.png)](https://www.youtube.com/watch?v=8pK3SP0ZG4k&feature=youtu.be)
+
+[![Watch the demo](misc/demo2.png)](https://www.youtube.com/watch?v=hsM0FB9uVhs&feature=youtu.be)
