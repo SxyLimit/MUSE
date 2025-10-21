@@ -29,18 +29,34 @@ from prompt.reflect_prompt import reflect_check_completion_prompt, reflect_updat
 from prompt.summarize_prompt import reflect_tool_enhance_prompt, reflect_methodology_enhance_prompt, \
     summarize_success_and_failure_prompt, merge_methodology_prompt, merge_application_prompt
 
+# ============================================================================
+# 模块概览
+# ============================================================================
+# 本文件实现了 MUSE 智能体的核心逻辑, 主要包含以下部分:
+# 1. BaseAgent: 提供智能体的基础设施, 如工具调用、历史记录维护、日志记录等。
+# 2. MUSE: 继承 BaseAgent, 组合计划、执行、反思、记忆等能力, 完成复杂任务。
+# 3. 多种辅助函数, 用于解析工具调用、执行 Python 代码、生成计划与反思流程。
+#
+# 为帮助中文读者快速理解, 在关键方法处补充了详细注释, 解释每一步的作用和数据流。
+
 
 @dataclass
 class ToolCallParseResult:
+    """封装工具调用解析结果的结构体。"""
+
     exist_tool_call: bool
     tool_json: Union[Dict[str, str], None]
     parse_msg: str
 
 class ToolResultFormatValidator(BaseModel):
+    """用于校验工具返回数据格式的 Pydantic 模型。"""
+
     data: str = Field(..., description="Tool execution results")
     instruction: str = Field(..., description="Instruction for LLMs bundled with the tool")
 
 class BaseAgent:
+    """智能体的抽象基类, 提供通用的初始化与执行流程。"""
+
     def __init__(
             self,
             init_model_name: str,
@@ -49,6 +65,7 @@ class BaseAgent:
             agent_name: str="default_agent",
             task_name: str="default_task"
     ):
+        # ----------- 基础运行参数 -----------
         self.subtask_action_limit = None
         self.num_time_limit = None
         self.num_subtasks_limit = None
@@ -60,6 +77,7 @@ class BaseAgent:
         self.llm = LLM(init_model_name)
         self.monitor = Monitor()
 
+        # 工具注册表, 会动态加载 toolbox 目录中的所有工具。
         self.tool_registrar = ToolRegistry()
         self.tool_registrar.load_tools(tools_folder="toolbox")
 
@@ -67,6 +85,7 @@ class BaseAgent:
         self.sys_prompt_template = sys_prompt_template
 
     def render_tool_schema_texts(self) -> str:
+        """将所有工具的 JSON Schema 拼装为文本, 提供给 LLM 参考。"""
         tool_schemas = []
         for tool_name, tool_func in self.tool_registrar.tools.items():
             self.monitor.init_tool(tool_name)
@@ -76,9 +95,11 @@ class BaseAgent:
         return tools_schema_texts
 
     def _get_output_dir(self) -> Path:
+        """返回当前任务的输出目录路径。"""
         return self.output_dir / self.agent_name / self.task_name
 
     def save_history(self, trajectory: List[dict]):
+        """将任务执行轨迹保存到磁盘, 方便复盘。"""
         try:
             output_path = self._get_output_dir() / "history.txt"
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +114,7 @@ class BaseAgent:
 
     @staticmethod
     def python_interpreter(code: str, work_dir: str = "/workspace") -> str:
+        """在隔离的临时文件中执行传入的 Python 代码。"""
         STATUS_EXECUTED = "CODE_EXECUTED"
         STATUS_FAILURE_TIMEOUT = "TOOL_FAILURE_TIMEOUT"
         STATUS_FAILURE_EXCEPTION = "TOOL_FAILURE_UNKNOWN_EXCEPTION"
@@ -102,10 +124,12 @@ class BaseAgent:
         script_path = None
 
         try:
+            # 将代码写入临时文件, 避免直接执行用户输入带来的安全隐患。
             with tempfile.NamedTemporaryFile(mode='w+', suffix='.py', delete=False, dir=work_dir, encoding='utf-8') as f:
                 f.write(code)
                 script_path = f.name
 
+            # 通过子进程执行临时脚本, 捕获标准输出与错误输出。
             proc = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True, text=True, timeout=timeout, cwd=work_dir, encoding='utf-8', errors='replace'
@@ -146,8 +170,10 @@ class BaseAgent:
         tool_name: str,
         arguments: dict
     ) -> AsyncGenerator[Tuple[str, str], None]:
+        """统一处理工具调用, 并以流式方式返回工具输出。"""
         tool_result = ""
         if tool_name == "python":
+            # Python 工具特殊处理: 直接调用上面的 python_interpreter。
             result = self.python_interpreter(arguments["code"])
             yield "[STREAMING]", result
             tool_result = result
@@ -173,6 +199,7 @@ class BaseAgent:
 
     @staticmethod
     def parse_tool_call(ai_response: str) -> 'ToolCallParseResult':
+        """解析 LLM 输出中的 <tool_call> 或 <code> 标签, 返回标准化的工具调用。"""
         tool_call_match = re.search(r'<tool_call>\s*({.*?})\s*</tool_call>', ai_response, re.DOTALL)
         if tool_call_match:
             tool_call_text = tool_call_match.group(1).strip()
@@ -209,9 +236,7 @@ class BaseAgent:
         return ToolCallParseResult(False, None, "No tool_call or python code found in the output.")
 
     async def _in_context_step(self, prompt: str):
-        """
-        Have a single-step conversation with LLM. Both the input prompt and LLM's reply will be saved in the Agent's history.
-        """
+        """与 LLM 进行单轮对话, 并将问答记录写入历史。"""
         ai_response = ""
         async for chunk in self.llm.async_stream_generate(prompt, history=self.history):
             ai_response += chunk
@@ -227,12 +252,14 @@ class BaseAgent:
             yield ""
 
     async def single_turn_chat(self, prompt: str, llm_name: str = None) -> None:
+        """暴露给外部的单轮问答接口, 支持临时切换 LLM。"""
         if llm_name is not None:
             self.llm = LLM(llm_name)
         async for chunk in self._in_context_step(prompt):
             print(chunk)
 
     async def run(self, prompt: str, llm_name: str=None, subtask_action_limit: int=None, num_actions_scale: float=None, subtasks_limit: int=None, time_limit: int=None, verbose: bool=True) -> None:
+        """Agent 对外的统一入口, 负责设置预算并调用子类实现的 _run。"""
         if llm_name is not None:
             self.llm = LLM(llm_name)
 
@@ -257,6 +284,8 @@ class BaseAgent:
 
 
 class MUSE(BaseAgent):
+    """MUSE 智能体实现, 将计划、执行、反思、记忆管理串联起来。"""
+
     def __init__(
             self,
             init_model_name: str,
@@ -280,6 +309,7 @@ class MUSE(BaseAgent):
         self.use_memory: bool = use_memory
         self.update_memory: bool = update_memory
 
+        # 初始化记忆管理器, 会加载历史记忆并同步到对话历史中。
         tool_schema_texts = self.render_tool_schema_texts()
         self.memory_manager = MemoryManager(memory_dir, self.logger, self._get_output_dir(), sys_prompt_template, tool_schema_texts, use_memory)
         self.history = self.memory_manager.get_history()
@@ -294,6 +324,7 @@ class MUSE(BaseAgent):
         self.to_do_subtasks: List[SubTask] = []
 
     async def _run(self, task: str) -> AsyncGenerator[str, None]:
+        """执行完整的任务流程: 规划 -> 执行子任务 -> 反思总结。"""
         # All yield results are only used to display results to the user.
         # The context analysis is based on the data stored in the agent.history property.
 
@@ -384,6 +415,7 @@ class MUSE(BaseAgent):
         return
 
     async def initial_plan(self, task: str, plan_trajectory: List[dict]):
+        """调用多步规划能力, 生成初始子任务列表并记录轨迹。"""
         user_prompt = f"<task>\n{task}\n</task>"
         async for chunk in self._multi_step_plan(user_prompt):
             yield chunk
@@ -402,6 +434,7 @@ class MUSE(BaseAgent):
         Determine if the LLM output contains tool execution requirements.
         If so, execute the tool. This process repeats until the LLM output no longer contains tool execution requirements.
         """
+        # 为防止直接修改原始轨迹, 这里使用副本进行操作。
         working_trajectory = copy.deepcopy(subtask_trajectory)
         def _append_turn(user_text: str, ai_text: str):
             subtask_trajectory.extend([

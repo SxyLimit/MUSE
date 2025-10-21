@@ -17,12 +17,15 @@ with open("config.yaml", "r") as f:
 LLM_CONFIG = config["llm"]
 
 class LLM:
+    """封装模型调用与统计逻辑, 对外提供统一的文本/多模态生成接口。"""
+
     NUM_CALLS = 0
     PROMPT_TOKENS = 0
     COMPLETION_TOKENS = 0
     MAX_TOKENS = 0
 
     def __init__(self, model: str="Qwen2.5-VL-7B-Instruct"):
+        """根据配置文件创建异步 OpenAI 客户端, 并记录目标模型标识。"""
         cfg = LLM_CONFIG.get(model)
         if cfg is None:
             raise ValueError(f"Model '{model}' not found in config.yaml")
@@ -36,6 +39,7 @@ class LLM:
 
     @staticmethod
     def _accumulate_usage(usage):
+        """聚合单次请求的 token 统计, 用于后续生成运行报告。"""
         get = (lambda k, default=0:
                usage.get(k, default) if isinstance(usage, dict)
                else getattr(usage, k, default))
@@ -55,6 +59,7 @@ class LLM:
             history: list[dict] = None,
             max_tokens: Union[int, None] = 32768
     ) -> str:
+        """发送同步式对话请求, 返回一次性生成的文本内容。"""
         LLM.NUM_CALLS += 1
         try:
             messages = await self.prepare_messages(prompt, image_path, history)
@@ -99,6 +104,7 @@ class LLM:
             max_tokens: Union[int, None] = 32768,
             temperature: float = 1.0
     ) -> AsyncGenerator[str, None]:
+        """以流式方式返回模型增量输出, 适合实时展示。"""
         LLM.NUM_CALLS += 1
         try:
             messages = await self.prepare_messages(prompt, image_path, history)
@@ -156,6 +162,7 @@ class LLM:
         image_path: Union[str, Path, None],
         history: list[dict] = None
     ) -> list[dict]:
+        """将历史上下文与当前指令组装成 OpenAI Chat 请求格式。"""
         messages = history.copy() if history else []
 
         if image_path:
@@ -173,6 +180,7 @@ class LLM:
         return messages
 
     def _handle_error(self, e: Exception) -> str:
+        """统一的异常处理, 返回带错误类型的字符串以供上游日志记录。"""
         print(f"==========Error: {e}==========")
         print(traceback.format_exc())
         print(f"==========Model: {self.model}==========")
@@ -180,6 +188,7 @@ class LLM:
 
     @staticmethod
     def _log_finish_reason(where: str, finish_reason: str | None):
+        """用于调试的 finish_reason 打印助手, 当前默认静默。"""
         if finish_reason is None:
             return
         # if finish_reason == "stop":
@@ -197,6 +206,7 @@ class LLM:
 
     @staticmethod
     async def image_to_base64(image_path: Union[str, Path]) -> str:
+        """读取图片并编码为 Base64, 供多模态对话使用。"""
         async with aiofiles.open(image_path, "rb") as image_file:
             content = await image_file.read()
             encoded_string = base64.b64encode(content).decode("utf-8")

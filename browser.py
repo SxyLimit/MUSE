@@ -14,16 +14,23 @@ from browser_use.config import get_default_profile, load_browser_use_config, get
 
 
 class BrowserUse:
+    """封装 BrowserUse 交互流程的高层接口, 负责浏览器会话与工具调用的初始化。"""
+
     def __init__(self):
+        # 读取 browser-use 的配置, 控制浏览器默认行为与 LLM 模型参数。
         self.config = load_browser_use_config()
+        # 浏览器状态由 BrowserSession 管理, 用于控制页面、标签、截图等信息。
         self.browser_session: BrowserSession | None = None
+        # Controller 将高层动作转换为浏览器操作, 比如点击、输入、等待等。
         self.controller: Controller | None = None
+        # 文件系统用于存储下载内容或截图等中间数据。
         # self.file_system: FileSystem | None = None
+        # LLM 对象负责在需要视觉理解时调用多模态模型。
         self.llm: ChatOpenAI | None = None
 
     # TODO: Need to expose more path parameters to initialization
     async def _init_browser_session(self, **kwargs):
-        """Initialize browser session using config"""
+        """依据配置创建浏览器会话, 并初始化控制器与多模态模型。"""
         if self.browser_session:
             return
 
@@ -72,6 +79,7 @@ class BrowserUse:
         self.file_system = FileSystem(base_dir=Path(file_system_path).expanduser())
 
     async def get_axtree(self):
+        """抓取当前页面的可访问性树, 为可视化分析或调试提供结构化描述。"""
         page = await self.browser_session.get_current_page()
         cdp_session = await page.context.new_cdp_session(page)
 
@@ -82,7 +90,7 @@ class BrowserUse:
         return flatten_axtree_to_str(ax_tree)
 
     async def get_browser_state(self) -> str:
-        """Get current browser state."""
+        """提取当前页面的摘要信息, 包括 URL、标题与可交互元素。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -118,6 +126,7 @@ class BrowserUse:
         return json.dumps(result["interactive_elements"])
 
     async def extract_content_by_vision(self, query: str) -> str:
+        """利用多模态 LLM 对当前页面截图进行问答, 实现视觉信息提取。"""
         state = await self.browser_session.get_state_summary(cache_clickable_elements_hashes=False)
         response = await self.llm.get_client().chat.completions.create(
             model=self.llm.model,
@@ -135,6 +144,7 @@ class BrowserUse:
         return response.choices[0].message.content
 
     async def go_to_url(self, url: str, new_tab: bool):
+        """导航至指定网址, new_tab=True 时在新标签页打开。"""
         if not self.browser_session:
             await self._init_browser_session()
 
@@ -152,6 +162,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def wait(self, seconds: int):
+        """调用内置 wait 动作, 让浏览器在当前页面停留指定秒数。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -169,6 +180,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def click_element_by_index(self, index: int):
+        """通过索引点击先前 `get_browser_state` 返回的交互元素。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -186,6 +198,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def input_text(self, index: int, text: str):
+        """向指定输入框填写文本, 索引对应交互元素列表中的位置。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -203,6 +216,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def send_keys(self, keys: str):
+        """模拟键盘输入, 常用于快捷键交互。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -220,6 +234,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def upload_file(self, index: int, path: str):
+        """触发文件上传控件, path 为容器内文件路径。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -237,6 +252,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def go_back(self):
+        """在浏览器历史记录中后退一步。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -254,6 +270,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def scroll(self, down: bool, num_pages: float, index: int):
+        """控制页面滚动, down 表示方向, num_pages 控制滚动距离。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -271,6 +288,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def list_tabs(self):
+        """列出当前所有标签页, 返回每个标签的 page_id 与标题。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -281,6 +299,7 @@ class BrowserUse:
         return tabs
 
     async def switch_tab(self, tab_index: int,):
+        """根据 page_id 切换激活的标签页。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -298,6 +317,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def close_tab(self, tab_index: int):
+        """关闭指定 page_id 的标签页。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -315,6 +335,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def get_dropdown_options(self, index: int):
+        """读取下拉框可选项, 供后续选择动作参考。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -332,6 +353,7 @@ class BrowserUse:
             return "ERROR: " + action_result.error
 
     async def select_dropdown_option(self, index: int, text: str):
+        """从下拉框中选择指定文本的选项。"""
         if not self.browser_session:
             return 'Error: No browser session active, please use go to a url'
 
@@ -352,6 +374,7 @@ class BrowserUse:
 #  UTILS
 # ========================================================================= #
 def flatten_axtree_to_str(axtree, ignored_roles=None, depth=0, node_idx=0):
+    """递归地将可访问性树展开为字符串, 方便调试查看节点层级信息。"""
     if ignored_roles is None:
         ignored_roles = {"none"}
 
